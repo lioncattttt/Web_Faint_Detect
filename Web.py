@@ -4,6 +4,7 @@ from ultralytics import YOLO
 import os
 from datetime import datetime
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration, WebRtcMode
+import streamlit.components.v1 as components
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
@@ -12,9 +13,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- Initialize Session State for Log Persistence ---
+# --- Initialize Session State for Log / Audio Alert Sync ---
 if "logs" not in st.session_state:
     st.session_state.logs = [f"⏱ [SYSTEM LOG] Core pipeline hooked, ready. — {datetime.now().strftime('%H:%M:%S')}"]
+if "alert_active" not in st.session_state:
+    st.session_state.alert_active = False
 
 # --- 2. DESIGN TOKENS ---
 T = {
@@ -36,14 +39,14 @@ T = {
 SPACE = {"base": 4, "xs": 8, "sm": 16, "md": 24, "lg": 40, "xl": 64, "gutter": 20}
 RADIUS = {"sm": 2, "default": 4, "md": 6, "lg": 8, "xl": 12, "full": 9999}
 
-CANDIDATE_WEIGHTS = ["best-5.pt", "best-5.pt"]
+CANDIDATE_WEIGHTS = ["best-5.pt"]
 
 @st.cache_resource
 def load_yolo_model(candidates):
     for path in candidates:
         if os.path.exists(path):
             return YOLO(path), path
-    return YOLO("best-5.pt"), "best-5.pt (fallback - no custom weights found)"
+    return YOLO("yolov8n.pt"), "yolov8n.pt (fallback - best-5.pt not found)"
 
 model, active_weights_path = load_yolo_model(CANDIDATE_WEIGHTS)
 
@@ -172,8 +175,9 @@ with st.sidebar:
     st.markdown(f"<p class='mono' style='font-size:11px; color:{T['secondary']};'>MODEL: {active_weights_path}</p>", unsafe_allow_html=True)
     
     confidence_threshold = st.slider("AI Sensitivity (Confidence)", 0.0, 1.0, 0.45)
+    enable_audio = st.checkbox("🔊 Enable Audible Sirens", value=True)
     
-    st.info("💡 Click 'Start' inside the video monitor window to turn on your local browser webcam feed stream.")
+    st.info("💡 Click 'Start' below to open the laptop camera stream. Click anywhere on the webpage once to allow audio autoplay permissions.")
 
 # --- 7. MAIN LAYOUT GRID ---
 col_main, col_intel = st.columns([2, 1])
@@ -193,8 +197,18 @@ with col_main:
             
             # Run Live Inference Frame By Frame
             results = self.model(img, conf=self.conf, verbose=False)
-            annotated_frame = results[0].plot()
+            boxes = results[0].boxes
+            detections = len(boxes)
             
+            if ALERT_ON_ANY_DETECTION:
+                alert_count = detections
+            else:
+                alert_count = sum(1 for c in boxes.cls.tolist() if int(c) in ALERT_CLASS_IDS)
+            
+            # Update session state flags cleanly across threads
+            st.session_state.alert_active = alert_count > 0
+
+            annotated_frame = results[0].plot()
             return frame.from_ndarray(annotated_frame, format="bgr24")
 
     # Interactive video display panel
@@ -214,12 +228,46 @@ with col_main:
 with col_intel:
     st.markdown(f"<p class='label-caps' style='margin-bottom:{SPACE['xs']}px;'>Intelligence Feed</p>", unsafe_allow_html=True)
     
-    st.markdown(f"""
-        <div class="zone-row"><div style="flex:1;">
-            <p style="margin:0; font-size:12px; font-weight:700; color:{T['on_surface']};">STUN RELAY NODE</p>
-            <p class="mono" style="margin:0; font-size:10px; color:{T['secondary']};">STATUS // WEBRTC TUNNEL STABLE</p>
-        </div></div>
-    """, unsafe_allow_html=True)
+    # --- Dynamic UI & Browser Audio Engine Injection ---
+    if st.session_state.alert_active:
+        if enable_audio:
+            # Safe browser-level WebAudio synthesizer setup
+            components.html(
+                """
+                <script>
+                    var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    var oscillator = audioCtx.createOscillator();
+                    var gainNode = audioCtx.createGain();
+                    
+                    oscillator.type = 'sawtooth'; 
+                    oscillator.frequency.setValueAtTime(800, audioCtx.currentTime); // Pitch in Hz
+                    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);        // Volume level
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioCtx.destination);
+                    oscillator.start();
+                    
+                    setTimeout(function(){
+                        oscillator.stop();
+                    }, 250); // Beep duration limit
+                </script>
+                """,
+                height=0, width=0
+            )
+        
+        st.markdown(f"""
+            <div class="zone-row alert"><div style="flex:1;">
+                <p style="margin:0; font-size:12px; font-weight:700; color:{T['on_surface']};">FALL DETECTED</p>
+                <p class="mono" style="margin:0; font-size:10px; color:{T['emergency_red']};">🚨 CRITICAL AUDIBLE SIREN BROADCASTING</p>
+            </div></div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+            <div class="zone-row"><div style="flex:1;">
+                <p style="margin:0; font-size:12px; font-weight:700; color:{T['on_surface']};">STUN RELAY NODE</p>
+                <p class="mono" style="margin:0; font-size:10px; color:{T['secondary']};">STATUS // WEBRTC TUNNEL STABLE</p>
+            </div></div>
+        """, unsafe_allow_html=True)
     
     log_box = st.container(height=280, border=True)
     with log_box:
