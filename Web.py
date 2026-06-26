@@ -12,7 +12,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. DESIGN TOKENS (sourced directly from Design.md — "Clinical Intelligence") ---
+# --- Initialize Session State for Log Persistence ---
+if "logs" not in st.session_state:
+    st.session_state.logs = [f"⏱ [SYSTEM LOG] Core pipeline hooked, ready. — {datetime.now().strftime('%H:%M:%S')}"]
+
+# --- 2. DESIGN TOKENS ---
 T = {
     "surface_container_lowest": "#0b0f10",
     "surface_container_low": "#191c1e",
@@ -23,21 +27,16 @@ T = {
     "outline": "#909097",
     "outline_variant": "#45464d",
     "primary": "#bec6e0",
-    "secondary": "#4edea3",          # Safe / Active / Normal — reserved exclusively for this
-    "tertiary": "#7bd0ff",           # informational accents
+    "secondary": "#4edea3",           # Safe / Active / Normal
+    "tertiary": "#7bd0ff",            # informational accents
     "error_container": "#93000a",
-    "emergency_red": "#EF4444",      # bypasses the palette for high-alert states
+    "emergency_red": "#EF4444",       # high-alert states
     "on_background": "#e0e3e5",
 }
 SPACE = {"base": 4, "xs": 8, "sm": 16, "md": 24, "lg": 40, "xl": 64, "gutter": 20}
 RADIUS = {"sm": 2, "default": 4, "md": 6, "lg": 8, "xl": 12, "full": 9999}
 
-# --- 3. MODEL RESOLUTION ---
-# Tries best.pt first (new custom weights), falls back to best-4.pt (previous
-# weights, still on disk), then to stock YOLOv8n if neither is present so the
-# app never crashes on a missing file — it just tells you in the sidebar.
 CANDIDATE_WEIGHTS = ["best.pt", "best-4.pt"]
-
 
 @st.cache_resource
 def load_yolo_model(candidates):
@@ -46,24 +45,15 @@ def load_yolo_model(candidates):
             return YOLO(path), path
     return YOLO("yolov8n.pt"), "yolov8n.pt (fallback - no custom weights found)"
 
-
 model, active_weights_path = load_yolo_model(CANDIDATE_WEIGHTS)
 
-# --- 3b. WHICH CLASSES COUNT AS A REAL ALERT ---
-# Bug fix: the previous version treated ANY detected box as "person down,"
-# so a normal sitting/standing person tripped the alert. We now only alert
-# on classes whose name looks fall/down-related. If your model is genuinely
-# single-class fall detection, every detection is correctly an alert anyway.
 ALERT_KEYWORDS = ["fall", "fallen", "down", "lying", "faint", "collapse"]
-model_class_names = model.names  # dict: {0: 'person', 1: 'fall', ...}
+model_class_names = model.names 
 
 ALERT_CLASS_IDS = {
     idx for idx, name in model_class_names.items()
     if any(kw in str(name).lower() for kw in ALERT_KEYWORDS)
 }
-# If no class name matches a keyword (e.g. single unlabeled class, or labels
-# don't contain these words), fall back to "every detection is an alert" —
-# preserves old behavior for genuinely single-purpose fall models.
 ALERT_ON_ANY_DETECTION = len(ALERT_CLASS_IDS) == 0
 
 # --- 4. GLOBAL STYLE INJECTION ---
@@ -199,44 +189,36 @@ with st.sidebar:
     st.markdown(f"<h3 style='margin-top:{SPACE['base']}px;'>Inference Tuning</h3>", unsafe_allow_html=True)
 
     weights_color = T["secondary"] if active_weights_path in ("best.pt", "best-4.pt") else T["tertiary"]
-    st.markdown(
-        f"<p class='mono' style='font-size:11px; color:{weights_color};'>MODEL: {active_weights_path}</p>",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"<p class='mono' style='font-size:11px; color:{weights_color};'>MODEL: {active_weights_path}</p>", unsafe_allow_html=True)
+    
     if active_weights_path not in ("best.pt", "best-4.pt"):
         st.caption("Drop best.pt next to this script to use your trained weights.")
 
     with st.expander("Model classes / alert logic", expanded=False):
-        st.markdown(
-            f"<p class='mono' style='font-size:11px; color:{T['on_surface_variant']};'>{model_class_names}</p>",
-            unsafe_allow_html=True
-        )
+        st.markdown(f"<p class='mono' style='font-size:11px; color:{T['on_surface_variant']};'>{model_class_names}</p>", unsafe_allow_html=True)
         if ALERT_ON_ANY_DETECTION:
-            st.markdown(
-                f"<p class='mono' style='font-size:11px; color:{T['tertiary']};'>"
-                f"No class names matched fall/down keywords — treating ANY detection as an alert. "
-                f"If that's wrong, check the class names above and tell me the right one(s).</p>",
-                unsafe_allow_html=True
-            )
+            st.markdown(f"<p class='mono' style='font-size:11px; color:{T['tertiary']};'>No class names matched fall/down keywords — treating ANY detection as an alert.</p>", unsafe_allow_html=True)
         else:
             alert_names = [str(model_class_names[i]) for i in ALERT_CLASS_IDS]
-            st.markdown(
-                f"<p class='mono' style='font-size:11px; color:{T['secondary']};'>"
-                f"Alerting only on: {', '.join(alert_names)}</p>",
-                unsafe_allow_html=True
-            )
+            st.markdown(f"<p class='mono' style='font-size:11px; color:{T['secondary']};'>Alerting only on: {', '.join(alert_names)}</p>", unsafe_allow_html=True)
 
     confidence_threshold = st.slider("AI Sensitivity (Confidence)", 0.0, 1.0, 0.45)
 
     st.divider()
-    source_type = st.radio("Target Input Source", ["Live Webcam (0)", "Demo File Corridor"])
+    source_type = st.radio("Target Input Source", ["Camera/Phone Stream", "Demo File Corridor"])
 
-    cam_index = 0
     video_path = 0
-    if source_type == "Live Webcam (0)":
-        cam_index = st.number_input("Webcam device index", min_value=0, max_value=8, value=0, step=1,
-                                     help="0 is usually the default built-in camera. Try 1/2 if you have multiple cameras.")
-        video_path = int(cam_index)
+    if source_type == "Camera/Phone Stream":
+        # Updated: Accepts either a basic digit index (0, 1) or a phone IP webcam URL
+        camera_input = st.text_input(
+            "Receiver Address / Source", 
+            value="0", 
+            help="Enter '0' for built-in camera, or an IP stream URL like 'http://192.168.1.50:8080/video' if streaming from your phone."
+        )
+        if camera_input.isdigit():
+            video_path = int(camera_input)
+        else:
+            video_path = camera_input
     else:
         uploaded_video = st.file_uploader("Upload a demo video file", type=["mp4", "mov", "avi", "mkv"])
         if uploaded_video is not None:
@@ -293,61 +275,35 @@ with col_intel:
     st.markdown(f"<p class='label-caps' style='margin-bottom:{SPACE['xs']}px;'>Intelligence Feed</p>", unsafe_allow_html=True)
     zone_slot = st.empty()
     log_box = st.container(height=360, border=True)
-    with log_box:
-        log_init = st.empty()
-        log_init.markdown(f"<p class='mono' style='color:{T['secondary']}; font-size:12px;'>⏱ [SYSTEM LOG] Core pipeline hooked, ready.</p>", unsafe_allow_html=True)
 
-
+# Helper Rendering Functions
 def stamp():
     return datetime.now().strftime("%H:%M:%S")
-
 
 def render_metric(slot, value, color):
     slot.markdown(f"<h3 style='margin:0; font-family:\"JetBrains Mono\", monospace; color:{color};'>{value}</h3>", unsafe_allow_html=True)
 
-
 def render_bar(slot, pct, color):
     pct = max(0, min(100, pct))
-    slot.markdown(
-        f"<div class='progress-track'><div class='progress-fill' style='width:{pct}%; background:{color};'></div></div>",
-        unsafe_allow_html=True
-    )
-
+    slot.markdown(f"<div class='progress-track'><div class='progress-fill' style='width:{pct}%; background:{color};'></div></div>", unsafe_allow_html=True)
 
 def render_zone_status(slot, person_present, alert):
-    if alert:
-        sub, cls = "ALERT // PERSON DOWN DETECTED", "alert"
-    elif person_present:
-        sub, cls = "ACTIVE // PERSON DETECTED", "ok"
-    else:
-        sub, cls = "MONITORING // NO ACTIVITY", "ok"
+    sub, cls = ("ALERT // PERSON DOWN DETECTED", "alert") if alert else (("ACTIVE // PERSON DETECTED", "ok") if person_present else ("MONITORING // NO ACTIVITY", "ok"))
     row_class = "zone-row alert" if cls == "alert" else "zone-row"
     text_color = T["emergency_red"] if cls == "alert" else T["secondary"]
-    slot.markdown(
-        f"<div class='{row_class}'><div style='flex:1;'>"
-        f"<p style='margin:0; font-size:12px; font-weight:700; color:{T['on_surface']};'>CORRIDOR B-42</p>"
-        f"<p class='mono' style='margin:0; font-size:10px; color:{text_color};'>{sub}</p>"
-        f"</div></div>",
-        unsafe_allow_html=True
-    )
-
+    slot.markdown(f"<div class='{row_class}'><div style='flex:1;'><p style='margin:0; font-size:12px; font-weight:700; color:{T['on_surface']};'>CORRIDOR B-42</p><p class='mono' style='margin:0; font-size:10px; color:{text_color};'>{sub}</p></div></div>", unsafe_allow_html=True)
 
 def render_badge(slot, alert):
     if alert:
-        slot.markdown(
-            f"<div class='ai-active-badge alert'><span class='pulse-dot alert'></span>"
-            f"<span class='mono' style='font-size:11px; color:{T['emergency_red']}; font-weight:700;'>ANOMALY DETECTED</span></div>",
-            unsafe_allow_html=True
-        )
+        slot.markdown(f"<div class='ai-active-badge alert'><span class='pulse-dot alert'></span><span class='mono' style='font-size:11px; color:{T['emergency_red']}; font-weight:700;'>ANOMALY DETECTED</span></div>", unsafe_allow_html=True)
     else:
-        slot.markdown(
-            f"<div class='ai-active-badge'><span class='pulse-dot'></span>"
-            f"<span class='mono' style='font-size:11px; color:{T['secondary']}; font-weight:700;'>AI ANALYTICS ACTIVE</span></div>",
-            unsafe_allow_html=True
-        )
+        slot.markdown(f"<div class='ai-active-badge'><span class='pulse-dot'></span><span class='mono' style='font-size:11px; color:{T['secondary']}; font-weight:700;'>AI ANALYTICS ACTIVE</span></div>", unsafe_allow_html=True)
 
+def update_logs_display():
+    with log_box:
+        st.markdown("".join(st.session_state.logs), unsafe_allow_html=True)
 
-# Initial / idle state
+# Initial baseline rendering
 clock_slot.markdown(f"<p class='mono' style='text-align:right; font-size:11px; color:{T['outline']};'>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>", unsafe_allow_html=True)
 render_metric(metric_fps, "0.0 FPS", T["secondary"])
 render_bar(bar_fps, 0, T["secondary"])
@@ -357,19 +313,15 @@ render_metric(metric_conf, f"{confidence_threshold*100:.1f}%", T["tertiary"])
 render_bar(bar_conf, confidence_threshold * 100, T["tertiary"])
 render_badge(badge_slot, alert=False)
 render_zone_status(zone_slot, person_present=False, alert=False)
+update_logs_display()
 
 # --- 8. LIVE CAPTURE LOOP ---
 if run_stream:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        st.error(
-            f"Cannot open video source `{video_path}`. If this is a webcam, check that no other "
-            f"app is using the camera and try a different device index in the sidebar. If running "
-            f"in a remote/server environment, a physical webcam may not be reachable at all - use "
-            f"the Demo File Corridor option with an uploaded video instead."
-        )
+        st.error(f"Cannot open video source `{video_path}`. Verify the address link or standard camera index.")
     else:
-        prev_time = 0
+        prev_time = time.time()
         frame_counter = 0
 
         while cap.isOpened() and run_stream:
@@ -384,15 +336,12 @@ if run_stream:
             frame_counter += 1
             frame = cv2.resize(frame, (854, 480))
 
-            # --- MODEL INFERENCE (real, on the live frame) ---
+            # Inference execution
             results = model(frame, conf=confidence_threshold, verbose=False)
             boxes = results[0].boxes
             detections = len(boxes)
             annotated_frame = results[0].plot()
 
-            # Bug fix: only count boxes whose class is an actual fall/down
-            # class as an alert. A detected person standing/sitting normally
-            # should NOT trigger "PERSON DOWN DETECTED".
             if ALERT_ON_ANY_DETECTION:
                 alert_count = detections
             else:
@@ -422,13 +371,11 @@ if run_stream:
                 render_bar(bar_conf, confidence_threshold * 100, T["tertiary"])
 
             if alert_active and frame_counter % 24 == 0:
-                log_box.markdown(
-                    f"<p class='mono' style='color:{T['emergency_red']}; font-size:12px; margin:2px 0;'>"
-                    f"⚠ [ALERT] {alert_count} signature flag(s) - Camera NORTH_084 - {stamp()}</p>",
-                    unsafe_allow_html=True
-                )
+                new_log = f"<p class='mono' style='color:{T['emergency_red']}; font-size:12px; margin:2px 0;'>⚠ [ALERT] {alert_count} signature flag(s) - Camera NORTH_084 - {stamp()}</p>"
+                st.session_state.logs.append(new_log)
+                update_logs_display()
 
-            time.sleep(0.001)
+            time.sleep(0.01)
         cap.release()
 else:
     image_placeholder.image(
