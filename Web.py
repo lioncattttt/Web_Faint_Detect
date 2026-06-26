@@ -36,14 +36,14 @@ T = {
 SPACE = {"base": 4, "xs": 8, "sm": 16, "md": 24, "lg": 40, "xl": 64, "gutter": 20}
 RADIUS = {"sm": 2, "default": 4, "md": 6, "lg": 8, "xl": 12, "full": 9999}
 
-CANDIDATE_WEIGHTS = ["best.pt", "best-4.pt"]
+CANDIDATE_WEIGHTS = ["best-5.pt", "best-5.pt"]
 
 @st.cache_resource
 def load_yolo_model(candidates):
     for path in candidates:
         if os.path.exists(path):
             return YOLO(path), path
-    return YOLO("yolov8n.pt"), "yolov8n.pt (fallback - no custom weights found)"
+    return YOLO("best-5.pt"), "best-5.pt (fallback - no custom weights found)"
 
 model, active_weights_path = load_yolo_model(CANDIDATE_WEIGHTS)
 
