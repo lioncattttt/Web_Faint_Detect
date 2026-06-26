@@ -43,7 +43,7 @@ def load_yolo_model(candidates):
     for path in candidates:
         if os.path.exists(path):
             return YOLO(path), path
-    return YOLO("yolov8n.pt"), "yolov8n.pt (fallback - no custom weights found)"
+    return YOLO("best-5.pt"), "best-5.pt (fallback - no custom weights found)"
 
 model, active_weights_path = load_yolo_model(CANDIDATE_WEIGHTS)
 
